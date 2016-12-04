@@ -19,9 +19,24 @@
 
 #define SIZE 512
 
+struct journal{
+	int sock;
+	char *ip;
+	pid_t pid;
+	char *date;
+	pthread_t tid;
+	char *first_line;
+	char *retcode;
+	int size_file;
+};
+
 int cpt_max_cli;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void *exec(void *arg);
+char *gettime();
+char *journal_to_string(struct journal *);
+char *get_mimetype(char *);
+
 
 
