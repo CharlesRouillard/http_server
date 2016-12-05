@@ -17,11 +17,11 @@ SRC=$(DIR)/src/
 HC=
 
 .SUFFIXES:
-.PHONY: all clean test-http_server test-client
+.PHONY: all clean http_server test-client
 all: $(BIN)http_server $(BIN)client_test
 
-test-http_server: $(BIN)http_server
-	-$$PWD/bin/http_server 8080 5 0
+http_server: $(BIN)http_server
+	-$$PWD/bin/http_server 8081 5 0
 
 test-client: $(BIN)client_test
 	-$$PWD/bin/client_test

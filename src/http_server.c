@@ -6,7 +6,7 @@ void *exec(void *arg)
 	struct journal *journal = (struct journal *)arg;
 	struct stat info;
 	int r,i,fd;
-	char buff[SIZE],*p,*line[8],temp[30],*elt[3],cwd[PATH_MAX+1],*retmess,retcode[3],final[SIZE],*write_journal;
+	char buff[SIZE],*p,*line[2],temp[30],*elt[3],cwd[PATH_MAX+1],*retmess,retcode[3],final[SIZE],*write_journal;
 
 	sock = journal->sock;
 
@@ -16,12 +16,15 @@ void *exec(void *arg)
 	journal->tid = pthread_self();
 
 	buff[r] = '\0';
+
 	i = 0;
 	for(p = strtok(buff,"\r\n");p != NULL;p = strtok(NULL,"\r\n"))
 	{
 		line[i] = p;/*line[0] contient la 1ere ligne (GET /chemin HTTP), line[1] contient 
 (Host: ...)*/
 		i++;
+		if(i == 1)/*on ne prend que les 2 premières ligne de la requète du client*/
+			break;
 	}
 
 	strcpy(temp,line[0]);/*copie de line[0] via une variable temporaire car le strtok va modifier cett avaleur par la suite*/
@@ -31,7 +34,7 @@ void *exec(void *arg)
 	i = 0;
 	for(p = strtok(line[0]," ");p != NULL;p = strtok(NULL," "))
 	{
-		elt[i] = p;/*elt[0] contient GET, elt[1] contient /chemin et elt[2] contient HTTP1.1*/
+		elt[i] = p;/*elt[0] contient GET, elt[1] contient /chemin et elt[2] contient HTTP/1.1*/
 		i++;
 	}
 
@@ -91,7 +94,9 @@ void *exec(void *arg)
 			send(sock,final,strlen(final),0);
 		
 			/*envoi de la 2eme ligne*/
-			strcpy(final,"Content-Type: text/html\n");
+			strcpy(final,"Content-Type: ");
+			strcat(final,get_mimetype(cwd));
+			strcat(final,"\n");
 			send(sock,final,strlen(final),0);
 
 			/*envoi de la ligne vide*/
@@ -142,16 +147,54 @@ char *journal_to_string(struct journal *journal)
 	
 }
 
-char *get_mimetype(char *)
+char *get_mimetype(char *name)
 {
-	/*a remplir*/
+	FILE *fp;
+	char *p,*line;
+	size_t len = 0;
+	int i,r,j;
+	char *temp[4], *mimetemp[2];
+
+	i = 0;
+	for(p = strtok(name,".");p != NULL;p = strtok(NULL,"."))
+	{
+		temp[i] = p; /*temp[i-1] = extension recherché*/
+		i++;
+	}
+		
+	/*parcours fichier mime.types et récupération mime en fonction de l'extension*/
+	fp = fopen("/etc/mime.types","r");
+	while((r = getline(&line,&len,fp)) != -1)
+	{
+		if( (strstr(line,"#") == NULL) && line[0] != '\n')
+		{
+			j=0;
+			for(p=strtok(line,"\t"); p!=NULL; p=strtok(NULL,"\t"))
+			{
+				mimetemp[j] = p;
+				j++;		
+			}
+			if(j == 2)
+			{
+				for(p = strtok(mimetemp[1]," "); p != NULL; p = strtok(NULL," "))
+				{
+					if(strcmp(p,temp[i-1]) == 0)
+					{
+						fclose(fp);
+						return mimetemp[0];
+					}
+				}
+			}
+		}
+	}
+	fclose(fp);
+	return "text/plain";/*valeur par défaut*/;
 }
 
 int main(int argc, char **argv)
 {
 	/*variables*/
-	int port,sock,max_cli,r;
-	int comm;
+	int port,sock,max_cli,r,comm;
 	struct sockaddr_in addr,caller;
 	struct journal *journal;
 	socklen_t a;
