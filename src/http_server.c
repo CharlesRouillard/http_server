@@ -41,87 +41,96 @@ void *exec(void *arg)
 	strcpy(cwd,".");
 	strcat(cwd,elt[1]);
 
-	/*tester si c'est un requète GET ?*/
-	if(strcmp(elt[0],"GET") == 0)
+	/*stat sur le fichier*/
+	if(stat(cwd,&info) == 0 && info.st_mode & S_IXUSR)
 	{
-		/*envoi du fichier*/
-		fd = open(cwd,O_RDONLY);
-		if(fd == -1)
-		{
-			switch(errno)
-			{
-				case ENOENT:
-					strcpy(retcode,"404");
-					retmess = "Not Found";
-
-					/*envoi de la premiere ligne uniquement car erreur*/
-					strcpy(final,elt[2]); 
-					strcat(final," ");
-					strcat(final,retcode);
-					strcat(final," ");
-					strcat(final,retmess);
-					strcat(final,"\n");
-					send(sock,final,strlen(final),0);
-
-					break;
-				case EACCES:
-					strcpy(retcode,"403");
-					retmess = "Forbidden";
-
-					/*envoi de la premiere ligne uniquement car erreur*/
-					strcpy(final,elt[2]); 
-					strcat(final," ");
-					strcat(final,retcode);
-					strcat(final," ");
-					strcat(final,retmess);
-					strcat(final,"\n");
-					send(sock,final,strlen(final),0);
-
-					break;
-			}
-		}
-		else{
-			strcpy(retcode,"200");
-			retmess = "OK";
-
-			/*envoi de la premiere ligne*/
-			strcpy(final,elt[2]); 
-			strcat(final," ");
-			strcat(final,retcode);
-			strcat(final," ");
-			strcat(final,retmess);
-			strcat(final,"\n");
-			send(sock,final,strlen(final),0);
-		
-			/*envoi de la 2eme ligne*/
-			strcpy(final,"Content-Type: ");
-			strcat(final,get_mimetype(cwd));
-			strcat(final,"\n");
-			send(sock,final,strlen(final),0);
-
-			/*envoi de la ligne vide*/
-			send(sock,"\n",1,0);
-
-			/*envoi du contenu du fichier*/		
-			while((r = read(fd,buff,sizeof(buff))) > 0)
-			{
-				send(sock,buff,r,0);
-			}
-		}
+		/*le fichier est un fichier éxécutable*/
+		printf("éxécutable\n");
 	}
+	else
+	{
+		printf("pas exe\n");
+		/*tester si c'est un requète GET ?*/
+		if(strcmp(elt[0],"GET") == 0)
+		{
+			/*envoi du fichier*/
+			fd = open(cwd,O_RDONLY);
+			if(fd == -1)
+			{
+				switch(errno)
+				{
+					case ENOENT:
+						strcpy(retcode,"404");
+						retmess = "Not Found";
 
-	journal->retcode = retcode;
-	stat(cwd,&info);/*fonction stat pour avoir la taille du fichier*/
-	journal->size_file = (int)info.st_size;
+						/*envoi de la premiere ligne uniquement car erreur*/
+						strcpy(final,elt[2]); 
+						strcat(final," ");
+						strcat(final,retcode);
+						strcat(final," ");
+						strcat(final,retmess);
+						strcat(final,"\n");
+						send(sock,final,strlen(final),0);
 
-	/*écriture dans le fichier de log avec le verrou*/
-	pthread_mutex_lock(&mutex);
-	fd = open("/tmp/http3605942.log",O_WRONLY|O_CREAT|O_APPEND,0666);
-	write_journal = journal_to_string(journal);
-	write(fd,write_journal,strlen(write_journal));
-	write(fd,"\n",1);
-	cpt_max_cli--;
-	pthread_mutex_unlock(&mutex);
+						break;
+					case EACCES:
+						strcpy(retcode,"403");
+						retmess = "Forbidden";
+
+						/*envoi de la premiere ligne uniquement car erreur*/
+						strcpy(final,elt[2]); 
+						strcat(final," ");
+						strcat(final,retcode);
+						strcat(final," ");
+						strcat(final,retmess);
+						strcat(final,"\n");
+						send(sock,final,strlen(final),0);
+
+						break;
+				}
+			}
+			else{
+				strcpy(retcode,"200");
+				retmess = "OK";
+
+				/*envoi de la premiere ligne*/
+				strcpy(final,elt[2]); 
+				strcat(final," ");
+				strcat(final,retcode);
+				strcat(final," ");
+				strcat(final,retmess);
+				strcat(final,"\n");
+				send(sock,final,strlen(final),0);
+		
+				/*envoi de la 2eme ligne*/
+				strcpy(final,"Content-Type: ");
+				strcat(final,get_mimetype(cwd));
+				strcat(final,"\n");
+				send(sock,final,strlen(final),0);
+
+				/*envoi de la ligne vide*/
+				send(sock,"\n",1,0);
+
+				/*envoi du contenu du fichier*/		
+				while((r = read(fd,buff,sizeof(buff))) > 0)
+				{
+					send(sock,buff,r,0);
+				}
+			}
+		}
+
+		journal->retcode = retcode;
+		journal->size_file = (int)info.st_size;/*on récupère la taille grace a la fonction stat faites plus haut*/
+
+		/*écriture dans le fichier de log avec le verrou*/
+		pthread_mutex_lock(&mutex);
+		fd = open("/tmp/http3605942.log",O_WRONLY|O_CREAT|O_APPEND,0666);
+		write_journal = journal_to_string(journal);
+		write(fd,write_journal,strlen(write_journal));
+		write(fd,"\n",1);
+		cpt_max_cli--;
+		pthread_mutex_unlock(&mutex);
+	}
 	
 	close(fd);
 	close(sock);
@@ -166,6 +175,7 @@ char *get_mimetype(char *name)
 	fp = fopen("/etc/mime.types","r");
 	while((r = getline(&line,&len,fp)) != -1)
 	{
+		/*le début du fichier contient souvent des #, on les oublie, ainsi que les lignes vides*/
 		if( (strstr(line,"#") == NULL) && line[0] != '\n')
 		{
 			j=0;
