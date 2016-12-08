@@ -6,7 +6,7 @@ void *exec(void *arg)
 	struct journal *journal = (struct journal *)arg;
 	struct stat info;
 	int r,i,fd;
-	char buff[SIZE],*p,*line[2],temp[30],*elt[3],cwd[PATH_MAX+1],*retmess,retcode[3],final[SIZE],*write_journal;
+	char buff[SIZE],*p,*line[2],temp[30],*elt[3],cwd[PATH_MAX+1],cwdTemp[PATH_MAX],*retmess,retcode[3],final[SIZE],*write_journal;
 
 	sock = journal->sock;
 
@@ -238,6 +238,7 @@ int main(int argc, char **argv)
 			while(1)
 			{
 				comm = accept(sock,(struct sockaddr *)&caller,&a);
+				pthread_mutex_lock(&mutex);
 				if(cpt_max_cli < max_cli){
 					if(comm >= 0)
 					{
@@ -245,7 +246,6 @@ int main(int argc, char **argv)
 						journal->sock = comm;
 						journal->ip = inet_ntoa(caller.sin_addr);
 						journal->pid = getpid();
-						pthread_mutex_lock(&mutex);
 						cpt_max_cli++;
 						pthread_mutex_unlock(&mutex);
 						/*lancement du client dans une thread*/
@@ -256,6 +256,7 @@ int main(int argc, char **argv)
 						perror("accept");
 						exit(1);
 					}
+					pthread_mutex_unlock(&mutex);
 				}
 				else{
 					printf("nombre de client simultanés max atteint\n");
