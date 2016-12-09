@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include <fcntl.h>
+#include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -35,7 +36,7 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void *exec(void *arg);
 char *gettime();
-char *journal_to_string(struct journal *);
+char *journal_to_string(struct journal);
 char *get_mimetype(char *);
 
 

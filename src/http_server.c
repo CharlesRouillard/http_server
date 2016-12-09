@@ -2,18 +2,20 @@
 
 void *exec(void *arg)
 {
-	int sock;
-	struct journal *journal = (struct journal *)arg;
+	int sock,r,i,fd;
+	char buff[SIZE],*p,*line[2],temp[30],*elt[3],cwd[PATH_MAX+1],*retmess,*retcode,final[SIZE],*write_journal;
+	struct journal journal = (*(struct journal *)arg);
 	struct stat info;
-	int r,i,fd;
-	char buff[SIZE],*p,*line[2],temp[30],*elt[3],cwd[PATH_MAX+1],cwdTemp[PATH_MAX],*retmess,retcode[3],final[SIZE],*write_journal;
-
-	sock = journal->sock;
+	DIR *dp;
+	struct dirent *dir;
+	free(arg);
+	
+	sock = journal.sock;
 
 	r = recv(sock,buff,sizeof(buff),0); /*un seul recv ?*/
 
-	journal->date = gettime(); /*date de récéption de la requète*/
-	journal->tid = pthread_self();
+	journal.date = gettime(); /*date de récéption de la requète*/
+	journal.tid = pthread_self();
 
 	buff[r] = '\0';
 
@@ -28,7 +30,7 @@ void *exec(void *arg)
 	}
 
 	strcpy(temp,line[0]);/*copie de line[0] via une variable temporaire car le strtok va modifier cett avaleur par la suite*/
-	journal->first_line = temp;
+	journal.first_line = temp;
 
 	/*traitement des 2 premières lignes*/
 	i = 0;
@@ -41,100 +43,141 @@ void *exec(void *arg)
 	strcpy(cwd,".");
 	strcat(cwd,elt[1]);
 
-	/*stat sur le fichier*/
-	if(stat(cwd,&info) == 0 && info.st_mode & S_IXUSR)
+	/*tester si c'est un requète GET ?*/
+	if(strcmp(elt[0],"GET") == 0)
 	{
-		/*le fichier est un fichier éxécutable*/
-		printf("éxécutable\n");
-	}
-	else
-	{
-		printf("pas exe\n");
-		/*tester si c'est un requète GET ?*/
-		if(strcmp(elt[0],"GET") == 0)
+		fd = stat(cwd,&info);/*fonction stat pour avoir la taille du fichier ou le type*/
+		if(fd == -1)
 		{
-			/*envoi du fichier*/
-			fd = open(cwd,O_RDONLY);
-			if(fd == -1)
+			perror("stat");
+		}
+
+		if(S_ISDIR(info.st_mode))
+		{
+			printf("c'est un repertoire faire un ls si on a les droits\n");
+			retcode = "200";
+			retmess = "OK";
+
+			/*envoi de la première ligne*/
+			strcpy(final,elt[2]); 
+			strcat(final," ");
+			strcat(final,retcode);
+			strcat(final," ");
+			strcat(final,retmess);
+			strcat(final,"\n");
+			send(sock,final,strlen(final),0);
+
+			/*envoi de la deuxième ligne*/
+			strcpy(final,"Content-Type: text/plain\n");
+			send(sock,final,strlen(final),0);
+
+			/*envoi de la ligne vide*/
+			send(sock,"\n",1,0);
+	
+			/*envoi du contenu du répèrtoire*/
+			dp = opendir(cwd);
+			if(dp != NULL)
 			{
-				switch(errno)
+				while((dir = readdir(dp)))
 				{
-					case ENOENT:
-						strcpy(retcode,"404");
-						retmess = "Not Found";
-
-						/*envoi de la premiere ligne uniquement car erreur*/
-						strcpy(final,elt[2]); 
-						strcat(final," ");
-						strcat(final,retcode);
-						strcat(final," ");
-						strcat(final,retmess);
-						strcat(final,"\n");
-						send(sock,final,strlen(final),0);
-
-						break;
-					case EACCES:
-						strcpy(retcode,"403");
-						retmess = "Forbidden";
-
-						/*envoi de la premiere ligne uniquement car erreur*/
-						strcpy(final,elt[2]); 
-						strcat(final," ");
-						strcat(final,retcode);
-						strcat(final," ");
-						strcat(final,retmess);
-						strcat(final,"\n");
-						send(sock,final,strlen(final),0);
-
-						break;
+					send(sock,dir->d_name,strlen(dir->d_name),0);
+					send(sock,"\n",1,0);
 				}
 			}
-			else{
-				strcpy(retcode,"200");
-				retmess = "OK";
-
-				/*envoi de la premiere ligne*/
-				strcpy(final,elt[2]); 
-				strcat(final," ");
-				strcat(final,retcode);
-				strcat(final," ");
-				strcat(final,retmess);
-				strcat(final,"\n");
-				send(sock,final,strlen(final),0);
-		
-				/*envoi de la 2eme ligne*/
-				strcpy(final,"Content-Type: ");
-				strcat(final,get_mimetype(cwd));
-				strcat(final,"\n");
-				send(sock,final,strlen(final),0);
-
-				/*envoi de la ligne vide*/
-				send(sock,"\n",1,0);
-
-				/*envoi du contenu du fichier*/		
-				while((r = read(fd,buff,sizeof(buff))) > 0)
+			closedir(dp);
+		}
+		else
+		{
+			/*le chemin n'indique pas un répèrtoire, on test si c'est un éxécutable*/
+			if(!access(cwd,X_OK))
+			{
+				printf("c'est un executable !\n");
+			}
+			else
+			{
+				/*envoi du fichier*/
+				fd = open(cwd,O_RDONLY);
+				if(fd == -1)
 				{
-					send(sock,buff,r,0);
+					switch(errno)
+					{
+						case ENOENT:
+							retcode = "404";
+							retmess = "Not Found";
+
+							/*envoi de la premiere ligne uniquement car erreur*/
+							strcpy(final,elt[2]); 
+							strcat(final," ");
+							strcat(final,retcode);
+							strcat(final," ");
+							strcat(final,retmess);
+							strcat(final,"\n");
+							send(sock,final,strlen(final),0);
+
+							break;
+						case EACCES:
+							retcode = "403";
+							retmess = "Forbidden";
+
+							/*envoi de la premiere ligne uniquement car erreur*/
+							strcpy(final,elt[2]); 
+							strcat(final," ");
+							strcat(final,retcode);
+							strcat(final," ");
+							strcat(final,retmess);
+							strcat(final,"\n");
+							send(sock,final,strlen(final),0);
+
+							break;
+					}
+				}
+				else{
+					retcode = "200";
+					retmess = "OK";
+
+					/*envoi de la premiere ligne*/
+					strcpy(final,elt[2]); 
+					strcat(final," ");
+					strcat(final,retcode);
+					strcat(final," ");
+					strcat(final,retmess);
+					strcat(final,"\n");
+					send(sock,final,strlen(final),0);
+	
+					/*envoi de la 2eme ligne*/
+					strcpy(final,"Content-Type: ");
+					strcat(final,get_mimetype(cwd));
+					strcat(final,"\n");
+					send(sock,final,strlen(final),0);
+
+					/*envoi de la ligne vide*/
+					send(sock,"\n",1,0);
+
+					/*envoi du contenu du fichier*/		
+					while((r = read(fd,buff,sizeof(buff))) > 0)
+					{
+						send(sock,buff,r,0);
+					}
 				}
 			}
 		}
-
-		journal->retcode = retcode;
-		journal->size_file = (int)info.st_size;/*on récupère la taille grace a la fonction stat faites plus haut*/
-
-		/*écriture dans le fichier de log avec le verrou*/
-		pthread_mutex_lock(&mutex);
-		fd = open("/tmp/http3605942.log",O_WRONLY|O_CREAT|O_APPEND,0666);
-		write_journal = journal_to_string(journal);
-		write(fd,write_journal,strlen(write_journal));
-		write(fd,"\n",1);
-		cpt_max_cli--;
-		pthread_mutex_unlock(&mutex);
 	}
+	
+	journal.retcode = retcode;
+	journal.size_file = (int)info.st_size;
+
+	/*écriture dans le fichier de log avec le verrou*/
+	pthread_mutex_lock(&mutex);
+	fd = open("/tmp/http3605942.log",O_WRONLY|O_CREAT|O_APPEND,0666);
+	write_journal = journal_to_string(journal);
+	write(fd,write_journal,strlen(write_journal));
+	write(fd,"\n",1);
+	cpt_max_cli--;
+	pthread_mutex_unlock(&mutex);
 	
 	close(fd);
 	close(sock);
-
+	printf("connexion fermé\n");
 	pthread_exit((void *)0);
 }
 
@@ -148,12 +191,11 @@ char *gettime()
 	return ret;
 }
 
-char *journal_to_string(struct journal *journal)
+char *journal_to_string(struct journal journal)
 {
 	char *ret = malloc(100*sizeof(char));
-	sprintf(ret,"%s %s %d %u %s %s %d",journal->ip,journal->date,journal->pid,journal->tid,journal->first_line,journal->retcode,journal->size_file);
+	sprintf(ret,"%s %s %d %lu %s %s %d",journal.ip,journal.date,journal.pid,(long)journal.tid,journal.first_line,journal.retcode,journal.size_file);
 	return ret;
-	
 }
 
 char *get_mimetype(char *name)
@@ -170,34 +212,34 @@ char *get_mimetype(char *name)
 		temp[i] = p; /*temp[i-1] = extension recherché*/
 		i++;
 	}
+
+	line = malloc(512 * sizeof(char));
 		
 	/*parcours fichier mime.types et récupération mime en fonction de l'extension*/
-	fp = fopen("/etc/mime.types","r");
+	fp = fopen("./etc/mime.types","r");
 	while((r = getline(&line,&len,fp)) != -1)
 	{
-		/*le début du fichier contient souvent des #, on les oublie, ainsi que les lignes vides*/
-		if( (strstr(line,"#") == NULL) && line[0] != '\n')
+		j=0;
+		for(p = strtok(line,"\t");p != NULL;p = strtok(NULL,"\t"))
 		{
-			j=0;
-			for(p=strtok(line,"\t"); p!=NULL; p=strtok(NULL,"\t"))
+			mimetemp[j] = p;
+			j++;		
+		}
+		if(j == 2)
+		{
+			for(p = strtok(mimetemp[1]," "); p != NULL; p = strtok(NULL," "))
 			{
-				mimetemp[j] = p;
-				j++;		
-			}
-			if(j == 2)
-			{
-				for(p = strtok(mimetemp[1]," "); p != NULL; p = strtok(NULL," "))
+				if(strcmp(p,temp[i-1]) == 0)
 				{
-					if(strcmp(p,temp[i-1]) == 0)
-					{
-						fclose(fp);
-						return mimetemp[0];
-					}
+					fclose(fp);
+					free(line);
+					return mimetemp[0];
 				}
 			}
 		}
 	}
 	fclose(fp);
+	free(line);
 	return "text/plain";/*valeur par défaut*/;
 }
 
@@ -221,7 +263,6 @@ int main(int argc, char **argv)
 	max_cli = atoi(argv[2]);
 	a = sizeof(caller);
 	cpt_max_cli = 0;
-	journal = malloc(sizeof(struct journal));
 
 	sock = socket(AF_INET,SOCK_STREAM,0);
 	addr.sin_family = AF_INET;
@@ -237,7 +278,9 @@ int main(int argc, char **argv)
 		{
 			while(1)
 			{
+				journal = malloc(sizeof(struct journal));
 				comm = accept(sock,(struct sockaddr *)&caller,&a);
+				printf("connexion accepté\n");
 				pthread_mutex_lock(&mutex);
 				if(cpt_max_cli < max_cli){
 					if(comm >= 0)
@@ -247,7 +290,7 @@ int main(int argc, char **argv)
 						journal->ip = inet_ntoa(caller.sin_addr);
 						journal->pid = getpid();
 						cpt_max_cli++;
-						pthread_mutex_unlock(&mutex);
+						
 						/*lancement du client dans une thread*/
 						pthread_create(&th,NULL,exec,(void *)journal);
 					}
