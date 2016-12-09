@@ -33,8 +33,10 @@ struct journal{
 
 int cpt_max_cli;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pid_t pid;
 
 void *exec(void *arg);
+void func_alarm();
 char *gettime();
 char *journal_to_string(struct journal);
 char *get_mimetype(char *);

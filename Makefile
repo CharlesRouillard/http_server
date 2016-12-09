@@ -4,7 +4,7 @@
 
 # Documentation: http://www.gnu.org/software/make/manual/make.html
 CC = gcc
-LDFLAGS = -lrt -lpthread
+LDFLAGS = -lpthread
 CFLAGS =-W -Wall -ansi -pedantic -Iinclude
 
 DIR=.

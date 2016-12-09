@@ -2,10 +2,13 @@
 
 void *exec(void *arg)
 {
-	int sock,r,i,fd;
+	int sock,r,i,fd, status;
+	int tube1[2], tube2[2];
 	char buff[SIZE],*p,*line[2],temp[30],*elt[3],cwd[PATH_MAX+1],*retmess,*retcode,final[SIZE],*write_journal;
 	struct journal journal = (*(struct journal *)arg);
 	struct stat info;
+	struct sigaction action;
+	sigset_t sig;
 	DIR *dp;
 	struct dirent *dir;
 	free(arg);
@@ -91,7 +94,111 @@ void *exec(void *arg)
 			/*le chemin n'indique pas un répèrtoire, on test si c'est un éxécutable*/
 			if(!access(cwd,X_OK))
 			{
-				printf("c'est un executable !\n");
+					pipe(tube1);
+					pid = fork();
+					if(pid == 0) // FILS niveau 1
+					{
+						pipe(tube2);
+						sigfillset(&sig);
+						sigdelset(&sig, SIGALRM);
+
+						action.sa_mask = sig;
+						action.sa_flags = 0;
+						action.sa_handler = func_alarm;
+
+						sigaction(SIGALRM, &action, NULL);
+
+						pid = fork();
+						
+						if(pid == 0) //Fils Niveau 2
+						{
+							close(tube1[0]); /* ferme lecture 1er niveau */
+							close(tube1[1]); /* ferme ecriture 1er niveau */
+							close(tube2[0]);
+							dup2(tube2[1], STDOUT_FILENO);
+							dup2(tube2[1], STDERR_FILENO);
+							close(tube2[1]);
+							execl(cwd, NULL, NULL);
+							perror("execl");
+							exit(-1);
+						}
+						else //Père-Fils niveau 2
+						{
+							close(tube2[1]); /* ferme écriture 2ème niveau */
+							close(tube1[0]); /* ferme lecture 1er niveau */
+							/*
+							dup2(tube1[1], STDOUT_FILENO); 
+							dup2(tube1[1], STDERR_FILENO);
+							close(tube1[1]);
+							*/
+							alarm(10);
+							waitpid(pid, &status, 0);
+
+							if(status == 0)
+							{
+								retcode = "200";
+								retmess = "OK";
+
+								strcpy(final, elt[2]);
+								strcat(final, " ");
+								strcat(final, retcode);
+								strcat(final, " ");
+								strcat(final, retmess);
+								strcat(final, "\nContent-Type: text/plain\n\n");
+
+								send(sock,final,strlen(final),0);
+
+								while((r = read(tube2[0], buff, sizeof(buff))) > 0)
+								{
+									send(sock,buff,r,0);
+								}
+								close(sock);
+								close(tube2[0]);
+
+								write(tube1[1], "200", sizeof("200"));
+
+							}
+							else
+							{
+								write(tube1[1], "500", sizeof("500"));
+							}
+							/*
+								send valeur de retour
+							*/
+							exit(status);
+
+						}
+					}
+					else //Thread Principale.
+					{
+						close(tube1[1]);
+						waitpid(pid, &status, 0);
+						read(tube1[0], retcode, sizeof(retcode));
+
+						if((status == 0) && (strcmp(retcode, "200") == 0)) //Premier case.
+						{
+								/*
+									recuperer la valeur pour le journal.
+								*/
+						}
+						else
+						{
+							read(tube1[0], retcode, sizeof(retcode));
+							/*HTTP/ 500 Internal Serveur Erreur*/
+							retcode = "500";
+							retmess = "Internal Server Error\n";
+
+							strcpy(final, elt[2]);
+							strcat(final, " ");
+							strcat(final, retcode);
+							strcat(final, " ");
+							strcat(final, retmess);
+
+							send(sock, final, strlen(final), 0);
+
+							
+						}
+					}
 			}
 			else
 			{
@@ -181,6 +288,11 @@ void *exec(void *arg)
 	pthread_exit((void *)0);
 }
 
+void func_alarm()
+{
+	kill(pid, SIGINT);
+}
+
 char *gettime()
 {
 	char *ret = malloc(20*sizeof(char));
@@ -251,6 +363,8 @@ int main(int argc, char **argv)
 	struct journal *journal;
 	socklen_t a;
 	pthread_t th;
+					
+
 
 	if(argc != 4)
 	{
