@@ -2,25 +2,31 @@
 
 void *exec(void *arg)
 {
-	int sock,r,i,fd, status;
-	int tube1[2], tube2[2];
-	char buff[SIZE],*p,*line[2],temp[30],*elt[3],cwd[PATH_MAX+1],*retmess,*retcode,final[SIZE],*write_journal;
+	/*variables*/
+	int sock,r,nbBytesSend,i,fd, status,tempo;
+	int tube[2],tube2[2];
+	char buff[SIZE],*p,*line[2],temp[30],*elt[3],cwd[PATH_MAX+1],*retmess,*retcode,temp_retcode[3],final[SIZE],*write_journal,mime[100];
 	struct journal journal = (*(struct journal *)arg);
 	struct stat info;
 	struct sigaction action;
 	sigset_t sig;
 	DIR *dp;
 	struct dirent *dir;
-	free(arg);
 	
-	sock = journal.sock;
 
-	r = recv(sock,buff,sizeof(buff),0); /*un seul recv ?*/
+	/*init variables*/
+	free(arg);
+
+	sock = journal.sock;
+	r = recv(sock,buff,sizeof(buff),0); /*un seul recv*/
 
 	journal.date = gettime(); /*date de récéption de la requète*/
 	journal.tid = pthread_self();
 
 	buff[r] = '\0';
+
+	if(verbeux)
+		printf("\nRequète reçu :\n%s\n",buff);
 
 	i = 0;
 	for(p = strtok(buff,"\r\n");p != NULL;p = strtok(NULL,"\r\n"))
@@ -30,6 +36,12 @@ void *exec(void *arg)
 		i++;
 		if(i == 1)/*on ne prend que les 2 premières ligne de la requète du client*/
 			break;
+	}
+
+	if(line[0] == NULL)
+	{
+		close(sock);
+		pthread_exit((void *)0);
 	}
 
 	strcpy(temp,line[0]);/*copie de line[0] via une variable temporaire car le strtok va modifier cett avaleur par la suite*/
@@ -57,7 +69,9 @@ void *exec(void *arg)
 
 		if(S_ISDIR(info.st_mode))
 		{
-			printf("c'est un repertoire faire un ls si on a les droits\n");
+			/*Le chemin indique un répèrtoire, on envoi la taille du fichier*/
+			if(verbeux)
+				printf("Le chemin indique un répèrtoire\n");
 			retcode = "200";
 			retmess = "OK";
 
@@ -69,10 +83,14 @@ void *exec(void *arg)
 			strcat(final,retmess);
 			strcat(final,"\n");
 			send(sock,final,strlen(final),0);
+			if(verbeux)
+				printf("Envoi de : \n\t%s",final);
 
 			/*envoi de la deuxième ligne*/
 			strcpy(final,"Content-Type: text/plain\n");
 			send(sock,final,strlen(final),0);
+			if(verbeux)
+				printf("\t%s\n",final);
 
 			/*envoi de la ligne vide*/
 			send(sock,"\n",1,0);
@@ -85,6 +103,8 @@ void *exec(void *arg)
 				{
 					send(sock,dir->d_name,strlen(dir->d_name),0);
 					send(sock,"\n",1,0);
+					if(verbeux)
+						printf("\t%s\n",dir->d_name);
 				}
 			}
 			closedir(dp);
@@ -94,115 +114,124 @@ void *exec(void *arg)
 			/*le chemin n'indique pas un répèrtoire, on test si c'est un éxécutable*/
 			if(!access(cwd,X_OK))
 			{
-					pipe(tube1);
+				if(verbeux)
+					printf("Le chemin indique un éxécutable\n");
+				/*c'est un éxécutable*/
+				pipe(tube);
+				pid = fork();
+				if(pid == 0)
+				{
+					/*fils de niveau 1 qui va faire le relais entre la thread principal et son fils qui va gérer l'éxécutable*/
+					pipe(tube2);
+
+					/*gestion des signaux pour l'alarme*/
+					sigemptyset(&sig);
+					action.sa_mask = sig;
+					action.sa_flags = 0;
+					action.sa_handler = func_alarm;
+					sigaction(SIGALRM, &action, NULL);
+
+					/*nouveau fork qui va s'occuper de l'éxécutable*/
 					pid = fork();
-					if(pid == 0) // FILS niveau 1
+					if(pid == 0)
 					{
-						pipe(tube2);
-						sigfillset(&sig);
-						sigdelset(&sig, SIGALRM);
+						close(tube[0]);
+						close(tube[1]);
+						close(tube2[0]);
+						dup2(tube2[1],STDOUT_FILENO);
+						dup2(tube2[1],STDERR_FILENO);
+						close(tube2[1]);
 
-						action.sa_mask = sig;
-						action.sa_flags = 0;
-						action.sa_handler = func_alarm;
-
-						sigaction(SIGALRM, &action, NULL);
-
-						pid = fork();
-						
-						if(pid == 0) //Fils Niveau 2
-						{
-							close(tube1[0]); /* ferme lecture 1er niveau */
-							close(tube1[1]); /* ferme ecriture 1er niveau */
-							close(tube2[0]);
-							dup2(tube2[1], STDOUT_FILENO);
-							dup2(tube2[1], STDERR_FILENO);
-							close(tube2[1]);
-							execl(cwd, NULL, NULL);
-							perror("execl");
-							exit(-1);
-						}
-						else //Père-Fils niveau 2
-						{
-							close(tube2[1]); /* ferme écriture 2ème niveau */
-							close(tube1[0]); /* ferme lecture 1er niveau */
-							/*
-							dup2(tube1[1], STDOUT_FILENO); 
-							dup2(tube1[1], STDERR_FILENO);
-							close(tube1[1]);
-							*/
-							alarm(10);
-							waitpid(pid, &status, 0);
-
-							if(status == 0)
-							{
-								retcode = "200";
-								retmess = "OK";
-
-								strcpy(final, elt[2]);
-								strcat(final, " ");
-								strcat(final, retcode);
-								strcat(final, " ");
-								strcat(final, retmess);
-								strcat(final, "\nContent-Type: text/plain\n\n");
-
-								send(sock,final,strlen(final),0);
-
-								while((r = read(tube2[0], buff, sizeof(buff))) > 0)
-								{
-									send(sock,buff,r,0);
-								}
-								close(sock);
-								close(tube2[0]);
-
-								write(tube1[1], "200", sizeof("200"));
-
-							}
-							else
-							{
-								write(tube1[1], "500", sizeof("500"));
-							}
-							/*
-								send valeur de retour
-							*/
-							exit(status);
-
-						}
+						/*execl via le chemin*/
+						execl(cwd,cwd,0,0);
+						perror("execl");
+						exit(-1);
 					}
-					else //Thread Principale.
+					else
 					{
-						close(tube1[1]);
-						waitpid(pid, &status, 0);
-						read(tube1[0], retcode, sizeof(retcode));
+						nbBytesSend = 0;
+						close(tube[0]);
+						close(tube2[1]);
+						
+						alarm(10);
+						waitpid(pid,&status,0);
 
-						if((status == 0) && (strcmp(retcode, "200") == 0)) //Premier case.
+						/*si la réponse est 0, on envoi nous même le code 200*/
+						if(status == 0)
 						{
-								/*
-									recuperer la valeur pour le journal.
-								*/
+							retcode = "200";
+							retmess = "OK";
+	
+							strcpy(final,elt[2]); 
+							strcat(final," ");
+							strcat(final,retcode);
+							strcat(final," ");
+							strcat(final,retmess);
+							strcat(final,"\nContent-Type: text/plain\n\n");
+							send(sock,final,strlen(final),0);
+
+							if(verbeux)
+								printf("\nEnvoi de :\n%s",final);
+
+							while((r = read(tube2[0],buff,sizeof(buff))) > 0)
+							{
+								nbBytesSend += send(sock,buff,r,0);
+								if(verbeux)
+									printf("%s",buff);
+							}
+							write(tube[1],"200",sizeof("200"));
 						}
 						else
 						{
-							read(tube1[0], retcode, sizeof(retcode));
-							/*HTTP/ 500 Internal Serveur Erreur*/
-							retcode = "500";
-							retmess = "Internal Server Error\n";
-
-							strcpy(final, elt[2]);
-							strcat(final, " ");
-							strcat(final, retcode);
-							strcat(final, " ");
-							strcat(final, retmess);
-
-							send(sock, final, strlen(final), 0);
-
-							
+							/*si le code de retour n'est pas 0, on envoi le code 500, et le père s'occupera du reste*/
+							write(tube[1],"500",sizeof("500"));
 						}
+						write(tube[1],&nbBytesSend,sizeof(int));
+						close(tube[1]);
+						close(tube2[0]);
+						exit(status);/*on exit avec le code status du fils, pour que le père sache*/
 					}
+				}
+				else
+				{
+					/*retour a la thread principal, qui attend son fils avec les résultats*/
+					close(tube[1]);
+					waitpid(pid,&status,0);
+					read(tube[0],temp_retcode,sizeof(temp_retcode));
+					/*on test si le code de renvoi lu dans le pipe est 200 ou 500 et que le retour du fils etait bien 0*/
+					if(status == 0 && (strcmp(temp_retcode,"200") == 0))
+					{
+						retcode = "200";
+						/*si le code était 200, on lis la taille de la réponse transmise*/
+						read(tube[0],&tempo,sizeof(int));
+
+					}
+					else
+					{
+						retcode = "500";
+						/*si echec de l'éxécutable, c'est a nous d'envoyer une réponse*/
+						retcode = "500";
+						retmess = "Internal Server Error";
+
+						/*envoi de la premiere ligne*/
+						strcpy(final,elt[2]); 
+						strcat(final," ");
+						strcat(final,retcode);
+						strcat(final," ");
+						strcat(final,retmess);
+						strcat(final,"\n");
+						send(sock,final,strlen(final),0);
+						if(verbeux)
+							printf("\nErreur de l'éxécutable. Envoi de : %s\n",final);
+					}
+					close(tube[0]);
+				}
 			}
 			else
 			{
-				/*envoi du fichier*/
+				/*ce n'est pas un éxécutable, envoi du fichier*/
+				if(verbeux)
+					printf("Le chemin indique un fichier régulier\n");
 				fd = open(cwd,O_RDONLY);
 				if(fd == -1)
 				{
@@ -212,7 +241,7 @@ void *exec(void *arg)
 							retcode = "404";
 							retmess = "Not Found";
 
-							/*envoi de la premiere ligne uniquement car erreur*/
+							/*envoi de la premiere ligne uniquement car erreur 404*/
 							strcpy(final,elt[2]); 
 							strcat(final," ");
 							strcat(final,retcode);
@@ -220,13 +249,14 @@ void *exec(void *arg)
 							strcat(final,retmess);
 							strcat(final,"\n");
 							send(sock,final,strlen(final),0);
-
+							if(verbeux)
+								printf("\nFichier non trouvé. Envoi de :\n%s",final);
 							break;
 						case EACCES:
 							retcode = "403";
 							retmess = "Forbidden";
 
-							/*envoi de la premiere ligne uniquement car erreur*/
+							/*envoi de la premiere ligne uniquement car erreur 403*/
 							strcpy(final,elt[2]); 
 							strcat(final," ");
 							strcat(final,retcode);
@@ -234,7 +264,8 @@ void *exec(void *arg)
 							strcat(final,retmess);
 							strcat(final,"\n");
 							send(sock,final,strlen(final),0);
-
+							if(verbeux)
+								printf("\nDroit insufissant. Envoi de :\n%s",final);
 							break;
 					}
 				}
@@ -250,12 +281,19 @@ void *exec(void *arg)
 					strcat(final,retmess);
 					strcat(final,"\n");
 					send(sock,final,strlen(final),0);
+
+					if(verbeux)
+						printf("\nEnvoi de :\n%s",final);
 	
 					/*envoi de la 2eme ligne*/
 					strcpy(final,"Content-Type: ");
-					strcat(final,get_mimetype(cwd));
+					strcpy(mime,get_mimetype(cwd));
+					strcat(final,mime);
 					strcat(final,"\n");
 					send(sock,final,strlen(final),0);
+
+					if(verbeux)
+						printf("%s\n",final);
 
 					/*envoi de la ligne vide*/
 					send(sock,"\n",1,0);
@@ -264,12 +302,15 @@ void *exec(void *arg)
 					while((r = read(fd,buff,sizeof(buff))) > 0)
 					{
 						send(sock,buff,r,0);
+						if(verbeux)
+							printf("%s",buff);
 					}
 				}
 			}
 		}
 	}
 	
+	/*écriture dans le fichier log pour la journalisation*/
 	journal.retcode = retcode;
 	journal.size_file = (int)info.st_size;
 
@@ -277,6 +318,8 @@ void *exec(void *arg)
 	pthread_mutex_lock(&mutex);
 	fd = open("/tmp/http3605942.log",O_WRONLY|O_CREAT|O_APPEND,0666);
 	write_journal = journal_to_string(journal);
+	if(verbeux)
+		printf("Ecriture dans le journal de %s\n",write_journal);
 	write(fd,write_journal,strlen(write_journal));
 	write(fd,"\n",1);
 	cpt_max_cli--;
@@ -284,13 +327,17 @@ void *exec(void *arg)
 	
 	close(fd);
 	close(sock);
-	printf("connexion fermé\n");
+	if(verbeux)
+		printf("connexion fermé\n");
 	pthread_exit((void *)0);
 }
 
-void func_alarm()
+void func_alarm(int sig)
 {
-	kill(pid, SIGINT);
+	if(verbeux)
+		printf("signal reçu %d\n",sig);
+	if(sig == SIGALRM)
+		kill(pid, SIGINT);
 }
 
 char *gettime()
@@ -359,18 +406,36 @@ int main(int argc, char **argv)
 {
 	/*variables*/
 	int port,sock,max_cli,r,comm;
+	char verb; /*permet de choisir le mode verbeux, qui affiche plusieurs information a l'écran*/
 	struct sockaddr_in addr,caller;
 	struct journal *journal;
 	socklen_t a;
 	pthread_t th;
-					
-
 
 	if(argc != 4)
 	{
 		fprintf(stderr,"Usage: ./http_server port max_cli X\n");
 		exit(1);
 	}
+
+	while(1)
+	{
+		printf("Activer le mode verbeux ? O/N\n");
+		scanf(" %c",&verb);
+		if(verb == 'O' || verb == 'o'){
+			verbeux = 1;
+			break;
+		}
+		else if(verb == 'N' || verb == 'n'){
+			verbeux = 0;
+			break;
+		}
+		else
+			printf("Erreur, il faut saisir O ou N\n");
+	}
+	
+	if(verbeux)
+		printf("Mode verbeux activé !\n");
 
 	/*allocation variables*/
 	port = atoi(argv[1]); 
@@ -394,7 +459,8 @@ int main(int argc, char **argv)
 			{
 				journal = malloc(sizeof(struct journal));
 				comm = accept(sock,(struct sockaddr *)&caller,&a);
-				printf("connexion accepté\n");
+				if(verbeux)
+					printf("\nconnexion accepté <%s ; %d>\n",inet_ntoa(caller.sin_addr),ntohs(caller.sin_port));
 				pthread_mutex_lock(&mutex);
 				if(cpt_max_cli < max_cli){
 					if(comm >= 0)
@@ -404,7 +470,8 @@ int main(int argc, char **argv)
 						journal->ip = inet_ntoa(caller.sin_addr);
 						journal->pid = getpid();
 						cpt_max_cli++;
-						
+						if(verbeux)
+							printf("\nnb client connecté = %d\n",cpt_max_cli);
 						/*lancement du client dans une thread*/
 						pthread_create(&th,NULL,exec,(void *)journal);
 					}
@@ -416,7 +483,8 @@ int main(int argc, char **argv)
 					pthread_mutex_unlock(&mutex);
 				}
 				else{
-					printf("nombre de client simultanés max atteint\n");
+					if(verbeux)
+						printf("\nnombre de client simultanés max atteint\n");
 					close(comm);
 				}
 			}

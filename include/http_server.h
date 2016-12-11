@@ -18,7 +18,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 
-#define SIZE 512
+#define SIZE 1024
 
 struct journal{
 	int sock;
@@ -31,12 +31,12 @@ struct journal{
 	int size_file;
 };
 
-int cpt_max_cli;
+int cpt_max_cli,verbeux;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pid_t pid;
 
 void *exec(void *arg);
-void func_alarm();
+void func_alarm(int);
 char *gettime();
 char *journal_to_string(struct journal);
 char *get_mimetype(char *);
