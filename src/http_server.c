@@ -3,60 +3,106 @@
 void *exec(void *arg)
 {
 	/*variables*/
-	int sock,r,nbBytesSend,i,fd, status,tempo;
-	int tube[2],tube2[2];
-	char buff[SIZE],*p,*line[2],temp[30],*elt[3],cwd[PATH_MAX+1],*retmess,*retcode,temp_retcode[3],final[SIZE],*write_journal,mime[100];
+	int sock,r,i;
+	char buff[SIZE],*p,*line[2],temp[30],*elt[3],cwd[PATH_MAX+1];
 	struct journal journal = (*(struct journal *)arg);
-	struct stat info;
-	struct sigaction action;
-	sigset_t sig;
-	DIR *dp;
-	struct dirent *dir;
-	
+	struct pipeline *pipes;
 
 	/*init variables*/
 	free(arg);
 
+	taille_pipeline = 0;
+	pipe_tid = malloc(taille_pipeline * sizeof(pthread_t));
+
 	sock = journal.sock;
-	r = recv(sock,buff,sizeof(buff),0); /*un seul recv*/
+	while((r = recv(sock,buff,sizeof(buff),0)) > 0)
+	{
+		journal.date = gettime(); /*date de récéption de la requète*/
+		journal.tid = pthread_self();
 
-	journal.date = gettime(); /*date de récéption de la requète*/
-	journal.tid = pthread_self();
+		pipes = malloc(sizeof(struct pipeline));
+		buff[r] = '\0';
 
-	buff[r] = '\0';
+		if(verbeux)
+			printf("\nRequète reçu :\n%s\n",buff);
 
+		i = 0;
+		for(p = strtok(buff,"\r\n");p != NULL;p = strtok(NULL,"\r\n"))
+		{
+			line[i] = p;/*line[0] contient la 1ere ligne (GET /chemin HTTP), line[1] contient 
+	(Host: ...)*/
+			i++;
+			if(i == 1)/*on ne prend que les 2 premières ligne de la requète du client*/
+				break;
+		}
+
+		if(line[0] == NULL)
+		{
+			close(sock);
+			pthread_mutex_lock(&mutex);
+			cpt_max_cli--;
+			pthread_mutex_unlock(&mutex);
+			pthread_exit((void *)0);
+		}
+
+		strcpy(temp,line[0]);/*copie de line[0] via une variable temporaire car le strtok va modifier cett avaleur par la suite*/
+		journal.first_line = temp;
+
+		/*traitement des 2 premières lignes*/
+		i = 0;
+		for(p = strtok(line[0]," ");p != NULL;p = strtok(NULL," "))
+		{
+			elt[i] = p;/*elt[0] contient GET, elt[1] contient /chemin et elt[2] contient HTTP/1.1*/
+			i++;
+		}
+
+		strcpy(cwd,".");
+		strcat(cwd,elt[1]);
+	
+		pipes->journal = journal;
+		pipes->req = elt[0];
+		pipes->path = elt[1];
+		pipes->version = elt[2];
+		pipes->cwd = cwd;
+		pipes->buff = buff;
+		pipes->id = taille_pipeline; /*id de chaque thread pour gérer la fermeture*/
+
+		taille_pipeline++;
+		pipe_tid = realloc(pipe_tid,taille_pipeline);
+
+		pthread_create(&(pipe_tid[taille_pipeline-1]),NULL,func_pipeline,(void *)pipes);
+	}
+	pthread_mutex_lock(&mutex);
+	cpt_max_cli--;
+	pthread_mutex_unlock(&mutex);
+	close(sock);
 	if(verbeux)
-		printf("\nRequète reçu :\n%s\n",buff);
+		printf("connexion fermé\n");
+	pthread_exit((void *)0);
+}
 
-	i = 0;
-	for(p = strtok(buff,"\r\n");p != NULL;p = strtok(NULL,"\r\n"))
-	{
-		line[i] = p;/*line[0] contient la 1ere ligne (GET /chemin HTTP), line[1] contient 
-(Host: ...)*/
-		i++;
-		if(i == 1)/*on ne prend que les 2 premières ligne de la requète du client*/
-			break;
-	}
+void *func_pipeline(void *arg)
+{
+	int sock,r,nbBytesSend,fd, status,tempo,tube[2],tube2[2];
+	char buff[SIZE],temp[sizeof(int)],*elt[3],cwd[PATH_MAX+1],*retmess,*retcode,temp_retcode[3],final[SIZE],*write_journal,mime[100];
+	struct stat info;
+	struct sigaction action;
+	struct dirent *dir;
+	struct pipeline pipes;
+	sigset_t sig;
+	DIR *dp;
+	
+	pipes = (*(struct pipeline *)arg);
+	free(arg);
 
-	if(line[0] == NULL)
-	{
-		close(sock);
-		pthread_exit((void *)0);
-	}
+	sock = pipes.journal.sock;
+	elt[0] = pipes.req;
+	elt[1] = pipes.path;
+	elt[2] = pipes.version;
+	strcpy(cwd,pipes.cwd);
+	strcpy(buff,pipes.buff);
 
-	strcpy(temp,line[0]);/*copie de line[0] via une variable temporaire car le strtok va modifier cett avaleur par la suite*/
-	journal.first_line = temp;
-
-	/*traitement des 2 premières lignes*/
-	i = 0;
-	for(p = strtok(line[0]," ");p != NULL;p = strtok(NULL," "))
-	{
-		elt[i] = p;/*elt[0] contient GET, elt[1] contient /chemin et elt[2] contient HTTP/1.1*/
-		i++;
-	}
-
-	strcpy(cwd,".");
-	strcat(cwd,elt[1]);
+	nbBytesSend = 0;
 
 	/*tester si c'est un requète GET ?*/
 	if(strcmp(elt[0],"GET") == 0)
@@ -82,18 +128,18 @@ void *exec(void *arg)
 			strcat(final," ");
 			strcat(final,retmess);
 			strcat(final,"\n");
-			send(sock,final,strlen(final),0);
+			nbBytesSend += send(sock,final,strlen(final),0);
 			if(verbeux)
 				printf("Envoi de : \n\t%s",final);
 
 			/*envoi de la deuxième ligne*/
 			strcpy(final,"Content-Type: text/plain\n");
-			send(sock,final,strlen(final),0);
+			nbBytesSend += send(sock,final,strlen(final),0);
 			if(verbeux)
 				printf("\t%s\n",final);
 
 			/*envoi de la ligne vide*/
-			send(sock,"\n",1,0);
+			nbBytesSend += send(sock,"\n",1,0);
 	
 			/*envoi du contenu du répèrtoire*/
 			dp = opendir(cwd);
@@ -101,8 +147,8 @@ void *exec(void *arg)
 			{
 				while((dir = readdir(dp)))
 				{
-					send(sock,dir->d_name,strlen(dir->d_name),0);
-					send(sock,"\n",1,0);
+					nbBytesSend += send(sock,dir->d_name,strlen(dir->d_name),0);
+					nbBytesSend += send(sock,"\n",1,0);
 					if(verbeux)
 						printf("\t%s\n",dir->d_name);
 				}
@@ -149,7 +195,6 @@ void *exec(void *arg)
 					}
 					else
 					{
-						nbBytesSend = 0;
 						close(tube[0]);
 						close(tube2[1]);
 						
@@ -168,7 +213,7 @@ void *exec(void *arg)
 							strcat(final," ");
 							strcat(final,retmess);
 							strcat(final,"\nContent-Type: text/plain\n\n");
-							send(sock,final,strlen(final),0);
+							nbBytesSend += send(sock,final,strlen(final),0);
 
 							if(verbeux)
 								printf("\nEnvoi de :\n%s",final);
@@ -220,7 +265,7 @@ void *exec(void *arg)
 						strcat(final," ");
 						strcat(final,retmess);
 						strcat(final,"\n");
-						send(sock,final,strlen(final),0);
+						nbBytesSend += send(sock,final,strlen(final),0);
 						if(verbeux)
 							printf("\nErreur de l'éxécutable. Envoi de : %s\n",final);
 					}
@@ -248,7 +293,7 @@ void *exec(void *arg)
 							strcat(final," ");
 							strcat(final,retmess);
 							strcat(final,"\n");
-							send(sock,final,strlen(final),0);
+							nbBytesSend += send(sock,final,strlen(final),0);
 							if(verbeux)
 								printf("\nFichier non trouvé. Envoi de :\n%s",final);
 							break;
@@ -263,7 +308,7 @@ void *exec(void *arg)
 							strcat(final," ");
 							strcat(final,retmess);
 							strcat(final,"\n");
-							send(sock,final,strlen(final),0);
+							nbBytesSend += send(sock,final,strlen(final),0);
 							if(verbeux)
 								printf("\nDroit insufissant. Envoi de :\n%s",final);
 							break;
@@ -280,7 +325,7 @@ void *exec(void *arg)
 					strcat(final," ");
 					strcat(final,retmess);
 					strcat(final,"\n");
-					send(sock,final,strlen(final),0);
+					nbBytesSend += send(sock,final,strlen(final),0);
 
 					if(verbeux)
 						printf("\nEnvoi de :\n%s",final);
@@ -290,18 +335,26 @@ void *exec(void *arg)
 					strcpy(mime,get_mimetype(cwd));
 					strcat(final,mime);
 					strcat(final,"\n");
-					send(sock,final,strlen(final),0);
+					nbBytesSend += send(sock,final,strlen(final),0);
+
+					if(verbeux)
+						printf("%s",final);
+
+					strcpy(final,"Content-Length: ");
+					sprintf(temp,"%d",(int)(info.st_size));
+					strcat(final,temp);
+					strcat(final,"\n");
 
 					if(verbeux)
 						printf("%s\n",final);
 
 					/*envoi de la ligne vide*/
-					send(sock,"\n",1,0);
+					nbBytesSend += send(sock,"\n",1,0);
 
 					/*envoi du contenu du fichier*/		
 					while((r = read(fd,buff,sizeof(buff))) > 0)
 					{
-						send(sock,buff,r,0);
+						nbBytesSend += send(sock,buff,r,0);
 						if(verbeux)
 							printf("%s",buff);
 					}
@@ -311,25 +364,32 @@ void *exec(void *arg)
 	}
 	
 	/*écriture dans le fichier log pour la journalisation*/
-	journal.retcode = retcode;
-	journal.size_file = (int)info.st_size;
+	pipes.journal.retcode = retcode;
+	pipes.journal.size_file = nbBytesSend;
 
 	/*écriture dans le fichier de log avec le verrou*/
 	pthread_mutex_lock(&mutex);
 	fd = open("/tmp/http3605942.log",O_WRONLY|O_CREAT|O_APPEND,0666);
-	write_journal = journal_to_string(journal);
+	write_journal = journal_to_string(pipes.journal);
 	if(verbeux)
 		printf("Ecriture dans le journal de %s\n",write_journal);
 	write(fd,write_journal,strlen(write_journal));
 	write(fd,"\n",1);
-	cpt_max_cli--;
 	pthread_mutex_unlock(&mutex);
 	
 	close(fd);
-	close(sock);
-	if(verbeux)
-		printf("connexion fermé\n");
-	pthread_exit((void *)0);
+	if(pipes.id == 0){
+		if(verbeux)
+			printf("thread %lu d'id %d quitte\n",(long)pthread_self,pipes.id);
+		pthread_exit((void *)0);
+	}
+	else{
+		/*chaque thread attend la thread d'avant*/
+		if(verbeux)
+			printf("thread %lu d'id %d attend la thread d'id n°%d\n",(long)pthread_self,pipes.id,taille_pipeline-1);
+		pthread_join(pipe_tid[taille_pipeline-1],NULL);
+		pthread_exit((void *)0);
+	}
 }
 
 void func_alarm(int sig)

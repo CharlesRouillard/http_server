@@ -31,11 +31,23 @@ struct journal{
 	int size_file;
 };
 
-int cpt_max_cli,verbeux;
+struct pipeline{
+	int id;
+	struct journal journal;
+	char *req;
+	char *path;
+	char *version;
+	char *cwd;
+	char *buff;
+};
+
+int cpt_max_cli,verbeux,taille_pipeline;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pid_t pid;
+pthread_t *pipe_tid;
 
 void *exec(void *arg);
+void *func_pipeline(void *arg);
 void func_alarm(int);
 char *gettime();
 char *journal_to_string(struct journal);
