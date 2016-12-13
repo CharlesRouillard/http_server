@@ -68,8 +68,7 @@ void *exec(void *arg)
 		pipes->id = taille_pipeline; /*id de chaque thread pour gérer la fermeture*/
 
 		taille_pipeline++;
-		pipe_tid = realloc(pipe_tid,taille_pipeline);
-
+		pipe_tid = realloc(pipe_tid,(taille_pipeline*sizeof(pthread_t)));
 		pthread_create(&(pipe_tid[taille_pipeline-1]),NULL,func_pipeline,(void *)pipes);
 	}
 	pthread_mutex_lock(&mutex);
@@ -103,6 +102,7 @@ void *func_pipeline(void *arg)
 	strcpy(buff,pipes.buff);
 
 	nbBytesSend = 0;
+	flag_kill = 0;
 
 	/*tester si c'est un requète GET ?*/
 	if(strcmp(elt[0],"GET") == 0)
@@ -130,13 +130,35 @@ void *func_pipeline(void *arg)
 			strcat(final,"\n");
 			nbBytesSend += send(sock,final,strlen(final),0);
 			if(verbeux)
-				printf("Envoi de : \n\t%s",final);
+				printf("Envoi de : \n%s",final);
 
 			/*envoi de la deuxième ligne*/
 			strcpy(final,"Content-Type: text/plain\n");
 			nbBytesSend += send(sock,final,strlen(final),0);
 			if(verbeux)
-				printf("\t%s\n",final);
+				printf("%s",final);
+			
+			/*premier parcours du rep pour obtenir la taille en octet de tous les noms des fichiers qu'il contient*/
+			tempo = 0;
+			dp = opendir(cwd);
+			if(dp != NULL)
+			{
+				while((dir = readdir(dp)))
+				{
+					tempo += strlen(dir->d_name); 
+				}
+			}
+			closedir(dp);
+
+			/*ajout de cette taille dans le Content-Length*/
+			strcpy(final,"Content-Length: ");
+			sprintf(temp,"%d",tempo);
+			strcat(final,temp);
+			strcat(final,"\n");
+			nbBytesSend += send(sock,final,strlen(final),0);
+
+			if(verbeux)
+				printf("%s\n",final);
 
 			/*envoi de la ligne vide*/
 			nbBytesSend += send(sock,"\n",1,0);
@@ -150,7 +172,7 @@ void *func_pipeline(void *arg)
 					nbBytesSend += send(sock,dir->d_name,strlen(dir->d_name),0);
 					nbBytesSend += send(sock,"\n",1,0);
 					if(verbeux)
-						printf("\t%s\n",dir->d_name);
+						printf("%s\n",dir->d_name);
 				}
 			}
 			closedir(dp);
@@ -198,11 +220,11 @@ void *func_pipeline(void *arg)
 						close(tube[0]);
 						close(tube2[1]);
 						
-						alarm(10);
+						alarm(10);/*timer 10 secondes*/
 						waitpid(pid,&status,0);
-
+						printf("code retour fils = %d\n",status);
 						/*si la réponse est 0, on envoi nous même le code 200*/
-						if(status == 0)
+						if(status == 0 && flag_kill == 0)
 						{
 							retcode = "200";
 							retmess = "OK";
@@ -212,18 +234,32 @@ void *func_pipeline(void *arg)
 							strcat(final,retcode);
 							strcat(final," ");
 							strcat(final,retmess);
-							strcat(final,"\nContent-Type: text/plain\n\n");
+							strcat(final,"\nContent-Type: text/plain\n");
 							nbBytesSend += send(sock,final,strlen(final),0);
 
 							if(verbeux)
 								printf("\nEnvoi de :\n%s",final);
 
+							tempo = 0;
 							while((r = read(tube2[0],buff,sizeof(buff))) > 0)
 							{
-								nbBytesSend += send(sock,buff,r,0);
-								if(verbeux)
-									printf("%s",buff);
+								tempo += r;
 							}
+
+							/*ajout de cette taille dans le Content-Length*/
+							strcpy(final,"Content-Length: ");
+							sprintf(temp,"%d",tempo);
+							strcat(final,temp);
+							strcat(final,"\n\n");
+							nbBytesSend += send(sock,final,strlen(final),0);
+
+							if(verbeux)
+								printf("%s",final);
+
+							nbBytesSend += send(sock,buff,tempo,0);
+							if(verbeux)
+								printf("%s",buff);
+
 							write(tube[1],"200",sizeof("200"));
 						}
 						else
@@ -344,6 +380,7 @@ void *func_pipeline(void *arg)
 					sprintf(temp,"%d",(int)(info.st_size));
 					strcat(final,temp);
 					strcat(final,"\n");
+					nbBytesSend += send(sock,final,strlen(final),0);
 
 					if(verbeux)
 						printf("%s\n",final);
@@ -381,13 +418,16 @@ void *func_pipeline(void *arg)
 	if(pipes.id == 0){
 		if(verbeux)
 			printf("thread %lu d'id %d quitte\n",(long)pthread_self,pipes.id);
+		/*printf("fermeture %d\n",sock);
+		close(sock);*/
 		pthread_exit((void *)0);
 	}
 	else{
 		/*chaque thread attend la thread d'avant*/
 		if(verbeux)
-			printf("thread %lu d'id %d attend la thread d'id n°%d\n",(long)pthread_self,pipes.id,taille_pipeline-1);
+			printf("thread %lu d'id %d attend la thread d'id n°%d\n",(long)pthread_self,pipes.id,(pipes.id-1));
 		pthread_join(pipe_tid[taille_pipeline-1],NULL);
+		printf("attente terminé, leave\n");
 		pthread_exit((void *)0);
 	}
 }
@@ -396,8 +436,10 @@ void func_alarm(int sig)
 {
 	if(verbeux)
 		printf("signal reçu %d\n",sig);
-	if(sig == SIGALRM)
-		kill(pid, SIGINT);
+	if(sig == SIGALRM){
+		flag_kill = 1;
+		kill(pid, SIGINT);		
+	}
 }
 
 char *gettime()

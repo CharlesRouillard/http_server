@@ -21,7 +21,7 @@ HC=
 all: $(BIN)http_server $(BIN)client_test
 
 http_server: $(BIN)http_server
-	-$$PWD/bin/http_server 8081 5 0
+	-$$PWD/bin/http_server 8080 5 0
 
 test-client: $(BIN)client_test
 	-$$PWD/bin/client_test

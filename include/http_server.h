@@ -41,7 +41,7 @@ struct pipeline{
 	char *buff;
 };
 
-int cpt_max_cli,verbeux,taille_pipeline;
+int cpt_max_cli,verbeux,taille_pipeline,flag_kill;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pid_t pid;
 pthread_t *pipe_tid;
