@@ -33,6 +33,7 @@ struct journal{
 
 struct pipeline{
 	int id;
+	pthread_t parent;
 	struct journal journal;
 	char *req;
 	char *path;

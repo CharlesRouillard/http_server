@@ -7,6 +7,7 @@ void *exec(void *arg)
 	char buff[SIZE],*p,*line[2],temp[30],*elt[3],cwd[PATH_MAX+1];
 	struct journal journal = (*(struct journal *)arg);
 	struct pipeline *pipes;
+	pthread_t tid;
 
 	/*init variables*/
 	free(arg);
@@ -58,6 +59,17 @@ void *exec(void *arg)
 
 		strcpy(cwd,".");
 		strcat(cwd,elt[1]);
+
+		pthread_mutex_lock(&mutex);
+		if(taille_pipeline == 0)
+		{
+			pipes->id = 0;
+			pipes->parent = pthread_self();
+		}
+		else{
+			pipes->id = taille_pipeline;
+			pipes->parent = tid;
+		}
 	
 		pipes->journal = journal;
 		pipes->req = elt[0];
@@ -65,15 +77,17 @@ void *exec(void *arg)
 		pipes->version = elt[2];
 		pipes->cwd = cwd;
 		pipes->buff = buff;
-		pipes->id = taille_pipeline; /*id de chaque thread pour gérer la fermeture*/
 
 		taille_pipeline++;
-		pipe_tid = realloc(pipe_tid,(taille_pipeline*sizeof(pthread_t)));
-		pthread_create(&(pipe_tid[taille_pipeline-1]),NULL,func_pipeline,(void *)pipes);
+		
+		pthread_create(&tid,NULL,func_pipeline,(void *)pipes);
+		pthread_mutex_unlock(&mutex);
 	}
+	/*si recv 0 alors connexion TCP fermé*/
 	pthread_mutex_lock(&mutex);
 	cpt_max_cli--;
 	pthread_mutex_unlock(&mutex);
+	pthread_join(tid,NULL);
 	close(sock);
 	if(verbeux)
 		printf("connexion fermé\n");
@@ -91,8 +105,10 @@ void *func_pipeline(void *arg)
 	sigset_t sig;
 	DIR *dp;
 	
+	pthread_mutex_lock(&mutex);
 	pipes = (*(struct pipeline *)arg);
 	free(arg);
+	pthread_mutex_unlock(&mutex);
 
 	sock = pipes.journal.sock;
 	elt[0] = pipes.req;
@@ -418,15 +434,13 @@ void *func_pipeline(void *arg)
 	if(pipes.id == 0){
 		if(verbeux)
 			printf("thread %lu d'id %d quitte\n",(long)pthread_self,pipes.id);
-		/*printf("fermeture %d\n",sock);
-		close(sock);*/
 		pthread_exit((void *)0);
 	}
 	else{
 		/*chaque thread attend la thread d'avant*/
 		if(verbeux)
 			printf("thread %lu d'id %d attend la thread d'id n°%d\n",(long)pthread_self,pipes.id,(pipes.id-1));
-		pthread_join(pipe_tid[taille_pipeline-1],NULL);
+		pthread_join(pipes.parent,NULL);
 		printf("attente terminé, leave\n");
 		pthread_exit((void *)0);
 	}
